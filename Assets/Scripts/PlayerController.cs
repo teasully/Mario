@@ -4,22 +4,17 @@ using UnityEngine;
 
 public class PlayerController : MonoBehaviour
 {
-	static bool _KEYBOARD = false;
+    static bool _KEYBOARD = false;
 
     public static PlayerController _Player;
 
     float _yVelocity = -1f, _fVelocity,
-        _landTime, _landTime2, _pressTime,
-        _jumpWindow = 0.08f, // Used to determine double/triple jumps
-        _throwTimer;
+        _throwTimer; // Make sure id not just throw .001 seconds ago and regrab
     public float _gravityModifier = 1f;
-    Vector3 _dir, _look, _movePos;
 
     Vector2 axisLeft, _axisLeft2;
 
-    int _jumpIter;
-
-    bool _airborn, _hanging, _longJumping, _diving, _backflipping, _wallsliding, _summersaultSliding, _summersaulting, _hitWall, _canDoubleJump, _holding;
+    bool _airborn, _longJumping, _diving, _summersaultSliding, _hitWall, _holding;
 
     AudioSource _currentSound;
 
@@ -27,8 +22,8 @@ public class PlayerController : MonoBehaviour
 
     Animator _anim;
 
-    Transform _ledgeGrabber, _heldItem;
-    
+    Transform _heldItem;
+
     Rigidbody _holdRB;
     Vector3 _Checkpoint;
     PlayerCube _holdScript, _checkcubeScript;
@@ -39,20 +34,16 @@ public class PlayerController : MonoBehaviour
     {
         _Player = this;
 
-        _look = transform.position + transform.forward;
-
         _camPos = transform.position - ((transform.position - _camPosDesired).normalized * _camDistance) + Vector3.up * _camHeight;
         _camPosDesired = _camPos;
 
         _runTrail = transform.GetChild(1).GetComponent<ParticleSystem>();
 
-        _anim = GameObject.Find("man").GetComponent<Animator>();//transform.GetChild(4).GetComponent<Animator>();
+        _anim = GameObject.Find("man").GetComponent<Animator>();
 
-        _ledgeGrabber = transform.GetChild(2);
-        
-        _holdRB = GameObject.Find("Hold").GetComponent<Rigidbody>();
+        _holdRB = GameObject.Find("CheckCube").GetComponent<Rigidbody>();
         _holdRB.sleepThreshold = 0f;
-        
+
         _Checkpoint = _holdRB.transform.position;
         _checkcubeScript = _holdRB.transform.GetComponent<PlayerCube>();
 
@@ -109,13 +100,19 @@ public class PlayerController : MonoBehaviour
         if (Mathf.Abs(axisRight.y) > 0.2f)
         {
             _camHeight += axisRight.y * Time.deltaTime * 45f;
+            _camHeight = Mathf.Clamp(_camHeight, -5f, 25f);
+            Debug.Log(_camHeight);
         }
         // Interpolate camera for smoothness
         Vector3 xz = (transform.position - _camPosDesired);
         xz.y = 0f;
         _camPos = _anim.transform.position - xz.normalized * _camDistance + Vector3.up * _camHeight;
         cam.transform.position += (_camPos - cam.transform.position) * Time.deltaTime * 5f;
-       // cam.transform.position += (new Vector3(transform.position.x, transform.position.y + 10f, cam.transform.position.z) - cam.transform.position) * Time.deltaTime * 5f;
+        if (cam.transform.position.y < 0f)
+        {
+            cam.transform.position = new Vector3(cam.transform.position.x, 0f, cam.transform.position.z);
+        }
+        // cam.transform.position += (new Vector3(transform.position.x, transform.position.y + 10f, cam.transform.position.z) - cam.transform.position) * Time.deltaTime * 5f;
         // Move camera look with player
         Vector3 forw = cam.transform.forward;
         forw.y = 0f;
@@ -139,10 +136,9 @@ public class PlayerController : MonoBehaviour
         _anim.transform.position += -(_anim.transform.position - (transform.position - Vector3.up)) * Time.deltaTime * 20f;
         Quaternion r = transform.rotation;
         r.eulerAngles = new Vector3(_anim.transform.eulerAngles.x, r.eulerAngles.y + 90f, r.eulerAngles.z);
-        _anim.transform.rotation = Quaternion.Lerp(_anim.transform.rotation, r, Time.deltaTime * (_wallsliding || _summersaultSliding || _airborn || Time.time - _summerTimer < 0.3f ? 6f : 100f));
+        _anim.transform.rotation = Quaternion.Lerp(_anim.transform.rotation, r, Time.deltaTime * (_summersaultSliding || _airborn ? 6f : 100f));
 
         // TRY and predict throwing using physics shit
-        // r.AddForce((transform.forward * 600f * Mathf.Clamp(_fVelocity, 0.05f, 1f) * (_airborn ? 2f : 3.5f)) + new Vector3(0f, (_airborn ? 3f : 1.5f), 0f) * 250f);
         _throwGuess.transform.position -= (_throwGuess.transform.position - (transform.position + transform.up + (((transform.forward * 600f * Mathf.Clamp(_fVelocity, 0.05f, 1f) * (_airborn ? 2f : 3.5f)) + new Vector3(0f, (_airborn ? 3f : 1.5f), 0f) * 250f).normalized * 20f * _fVelocity))) * Time.deltaTime * 8f;
         if (_holding)
         {
@@ -154,7 +150,7 @@ public class PlayerController : MonoBehaviour
         }
     }
 
-    float _lookIter, _camDistance = 10f, _camHeight = 8f, _lastWallSlide, _lastLedgeGrab, _airTime, _maxClamp, _distanceTraveled, _diveTimer, _summerTimer;
+    float _lookIter, _camDistance = 10f, _camHeight = 8f, _airTime, _maxClamp, _diveTimer;
     float _xTilt;
     Vector3 _lookPos, _lookPosDesired, _camPos, _camPosDesired, _lastPos;
 
@@ -186,34 +182,33 @@ public class PlayerController : MonoBehaviour
         _anim.SetFloat("gravity", _yVelocity);
         _anim.SetBool("airborn", _airborn);
 
-        _anim.SetBool("wallslide", _wallsliding);
         // Check if holding; orient and check throw
         _holdRB.useGravity = true;
         _holdRB.drag = 0.1f;
-        if (_holding){
+        if (_holding)
+        {
             _heldItem.localRotation = Quaternion.identity;
-            if(Input.GetKeyDown(KeyCode.E) || Input.GetButtonDown("Square")){
+            if (Input.GetKeyDown(KeyCode.E) || Input.GetButtonDown("Square"))
+            {
                 Throw();
-                _throwTimer = Time.time;
             }
-        }else{
-            if(Input.GetKeyDown(KeyCode.E) || Input.GetButtonDown("Square")){
+        }
+        else
+        {
+            if (Input.GetKeyDown(KeyCode.E) || Input.GetButtonDown("Square"))
+            {
                 _checkcubeScript.Press();
             }
         }
-        
+
         if (_diving)
         {
-			_anim.SetBool("run", false);
+            _anim.SetBool("run", false);
             if (_animstate != AnimState.DIVING)
             {
                 _animstate = AnimState.DIVING;
                 _anim.SetTrigger("dive");
             }
-        }
-        else if (_wallsliding)
-        {
-            //_animstate = AnimState.WALLSLIDE;
         }
         else if (_summersaultSliding)
         {
@@ -222,11 +217,6 @@ public class PlayerController : MonoBehaviour
                 _animstate = AnimState.SLIDING;
                 _anim.SetTrigger("slide");
             }
-        }
-        else if (_hanging)
-        {
-            _anim.Play("Hang");
-            _animstate = AnimState.HANGING;
         }
         else if (!_airborn && _fVelocity > 0.001f)
         {
@@ -247,44 +237,30 @@ public class PlayerController : MonoBehaviour
         else
         {
             _anim.SetBool("run", false);
-            if (_jumpIter == 0)
-            {
-                _anim.Play("Jump0", 0, 1f - (Mathf.Clamp(_yVelocity, -2.5f, 2.3f) + 2.4f) / 8f);
-            }
+            _anim.Play("Jump0", 0, 1f - (Mathf.Clamp(_yVelocity, -2.5f, 2.3f) + 2.4f) / 8f);
         }
         // Check if below map
-        if (transform.position.y < -20)
+        float minY = 0f;
+        if (transform.position.y < minY)
         {
-            if(_holding){
+            if (_holding)
+            {
                 transform.position = _Checkpoint + new Vector3(0f, 5f, 0f);
             }
-            else{
-                transform.position = _holdRB.position + new Vector3(0f, 3f, 0f);  
-                _fVelocity = 0f;                
-            }             
+            else
+            {
+                transform.position = _holdRB.position + new Vector3(0f, 3f, 0f);
+                _fVelocity = 0f;
+            }
         }
         // Check if below map
-        if (_holdRB.position.y < -20)
+        if (_holdRB.position.y < minY)
         {
             _holdRB.position = _Checkpoint + new Vector3(0f, 10f, 0f);
             _holdRB.velocity = Vector3.zero;
         }
-        /*/ Scream if falling
-        if (_airborn && _yVelocity < 0f && !_hanging && !_wallsliding)
-        {
-            _airTime += Time.deltaTime;
-            if (_airTime > 2.25f && !SoundPlaying(9))
-            {
-                PlaySound(9);
-                _airTime -= 10f;
-            }
-        }
-        else if (_airTime != 0f)
-        {
-            _airTime = 0f;
-        }*/
         // Tilt
-        if (Mathf.Abs(axisLeft.x) > 0.1f && !_hanging && !_airborn && !_summersaultSliding)
+        if (Mathf.Abs(axisLeft.x) > 0.1f && !_airborn && !_summersaultSliding)
         {
             _xTilt += (20f * axisLeft.x - _xTilt) * Time.deltaTime * 3f;
         }
@@ -330,12 +306,10 @@ public class PlayerController : MonoBehaviour
         }
         else axisLeft = new Vector2(Input.GetAxis("Horizontal"), Input.GetAxis("Vertical"));
         if (axisLeft.magnitude < 0.1f) axisLeft = Vector2.zero;
-        _axisLeft2 += (axisLeft - _axisLeft2) * Time.deltaTime * (_wallsliding ? 20f : 2f);
+        _axisLeft2 += (axisLeft - _axisLeft2) * Time.deltaTime * 2f;
         // Check if pushing stick in opposite dir
         Vector3 fo = transform.forward,
             mu = Quaternion.Euler(0f, Camera.main.transform.rotation.eulerAngles.y, 0f) * new Vector3(axisLeft.x, 0f, axisLeft.y).normalized;
-        //Debug.DrawRay(transform.position, fo * 20f, Color.blue);
-        //Debug.DrawRay(transform.position, mu * 20f, Color.red);
         bool oppositeStick = false;
         bool onSlippery = false;
         if ((fo - mu).magnitude > 1.7f)
@@ -372,38 +346,16 @@ public class PlayerController : MonoBehaviour
                 Quaternion targetRotation = Quaternion.LookRotation(lookPos);
                 transform.rotation = Quaternion.Slerp(transform.rotation, targetRotation, 1f * Time.deltaTime * _fVelocity);
             }
-            // Move grabber
-            _ledgeGrabber.transform.localPosition = new Vector3(0f, -0.514f, 1.157f);
         }
         else if (_summersaultSliding)
         {
-            //Debug.Log("Sliding");
             Gravity();
             _fVelocity = Mathf.Clamp(_fVelocity - Time.deltaTime * 2f, 0f, 5f);
             MovePosition(transform.forward * 15f * _fVelocity);
             GetSound(11).pitch = 0.9f;
-            /*/ Jump while sliding
-            if (Input.GetButtonDown("X") || Input.GetKeyDown(KeyCode.Space))
-            {
-                // Normal jump if not opposite
-                if (!oppositeStick || Time.time - _landTime2 < 0.3f)
-                {
-                    Jump0();
-                }
-                // Summersault
-                else
-                {
-                    // Rotate player 180 degrees
-                    Summersault();
-                }
-                _summersaultSliding = false;
-                _summerTimer = Time.time;
-                StopSound(11);
-            }*/
             if (_fVelocity < 0.1f || _airborn)
             {
                 _summersaultSliding = false;
-                _summerTimer = Time.time;
                 if (!_airborn)
                 {
                     transform.Rotate(new Vector3(0f, 1f, 0f), 180f);
@@ -415,8 +367,6 @@ public class PlayerController : MonoBehaviour
         // Else, speed up if input
         else if (axisLeft.magnitude != 0f)
         {
-            //Debug.DrawRay(transform.position, fo * 20f, Color.blue);
-            //Debug.DrawRay(transform.position, mu * 20f, Color.red);
             if (oppositeStick)
             {
                 if (!_airborn && _fVelocity > 0.2f && Time.time - _diveTimer > 0.1f)
@@ -440,26 +390,10 @@ public class PlayerController : MonoBehaviour
         {
             _fVelocity = Mathf.Clamp(_fVelocity - Time.deltaTime * 4f, 0f, 5f);
         }
-        // Hanging on edge
-        if (_hanging)
-        {
-            if (Input.GetButtonDown("X") || Input.GetKeyDown(KeyCode.Space))
-            {
-                _hanging = false;
-                _lastLedgeGrab = Time.time;
-                _wallsliding = false;
-                Jump0(1.5f);
-                _fVelocity = 0.3f;
-                transform.parent = GameObject.Find("Game").transform;
-                //_anim.transform.Rotate(new Vector3(0f, 180f, 0f));
-            }
-            return;
-        }
         // Long jumping
-        else if (_longJumping)
+        if (_longJumping)
         {
             Gravity();
-            DoubleJump();
             Vector3 addPos = Camera.main.transform.forward * _axisLeft2.y + Camera.main.transform.right * _axisLeft2.x;
             addPos.y = 0f;
             MovePosition(transform.forward * 20f * Mathf.Clamp(_fVelocity, 0f, 10f) + addPos * 10f * _fVelocity);
@@ -496,75 +430,6 @@ public class PlayerController : MonoBehaviour
             }
             return;
         }
-        // Back-flipping
-        else if (_backflipping)
-        {
-            Gravity();
-            DoubleJump();
-            Vector3 addPos = Camera.main.transform.forward * _axisLeft2.y + Camera.main.transform.right * _axisLeft2.x;
-            addPos.y = 0f;
-            MovePosition(addPos * 5f - transform.forward * 4f);
-            if (!_airborn)
-            {
-                _backflipping = false;
-                _fVelocity /= 5f;
-            }
-            // Check dive
-            if (Input.GetButtonDown("Circle") || Input.GetKeyDown("v"))
-            {
-                _backflipping = false;
-                Dive();
-            }
-            return;
-        }
-        // Summersaulting
-        else if (_summersaulting)
-        {
-            Gravity();
-            DoubleJump();
-            Vector3 addPos = Camera.main.transform.forward * _axisLeft2.y + Camera.main.transform.right * _axisLeft2.x;
-            addPos.y = 0f;
-            MovePosition(addPos * 8f * _fVelocity + transform.forward * 6f);
-            if (!_airborn)
-            {
-                _summersaulting = false;
-                _fVelocity /= 5f;
-            }
-            // Check dive
-            if (Input.GetButtonDown("Circle") || Input.GetKeyDown("v"))
-            {
-                _summersaulting = false;
-                Dive();
-            }
-            return;
-        }
-        // Wall sliding
-        else if (_wallsliding)
-        {
-            Gravity();
-            GetSound(11).pitch = 0.25f + Mathf.Abs(_yVelocity);
-            // Jump off sliding wall
-            if ((Input.GetButtonDown("X") || Input.GetKeyDown(KeyCode.Space)))
-            {
-                // Rotate player 180 degrees
-                transform.Rotate(new Vector3(0f, 1f, 0f), 180f);
-                _fVelocity = 1f;
-                _wallsliding = false;
-                Jump0(1.5f);
-                StopSound(11);
-                PlaySound(12, false);
-                transform.parent = GameObject.Find("Game").transform;
-                _anim.transform.Rotate(new Vector3(0f, 180f, 0f));
-            }
-            if (!_airborn || _axisLeft2.magnitude == 0f)
-            {
-                _wallsliding = false;
-                transform.parent = GameObject.Find("Game").transform;
-                StopSound(11);
-                _anim.transform.Rotate(new Vector3(0f, 180f, 0f));
-            }
-            return;
-        }
         // Rotate player with left stick
         if (axisLeft.magnitude > 0f && !_airborn)
         {
@@ -574,15 +439,17 @@ public class PlayerController : MonoBehaviour
             Quaternion targetRotation = Quaternion.LookRotation(lookPos);
             if (axisLeft.magnitude < 0.11f && _fVelocity < 0.1f)
                 transform.rotation = targetRotation;
-            else {
-				Quaternion rot = transform.rotation;
-				transform.rotation = Quaternion.Slerp(transform.rotation, targetRotation, 5f * Time.deltaTime);
-				// Calculate amount rotated and slow player
-				float rotAmount = Mathf.Abs(rot.eulerAngles.y - transform.rotation.eulerAngles.y);
-				if(!_airborn && rotAmount > 1f && _fVelocity > 0.9f){
-					_fVelocity -= Time.deltaTime * Mathf.Clamp(rotAmount, 1f, 4f) / 3f;
-				}
-			}
+            else
+            {
+                Quaternion rot = transform.rotation;
+                transform.rotation = Quaternion.Slerp(transform.rotation, targetRotation, 5f * Time.deltaTime);
+                // Calculate amount rotated and slow player
+                float rotAmount = Mathf.Abs(rot.eulerAngles.y - transform.rotation.eulerAngles.y);
+                if (!_airborn && rotAmount > 1f && _fVelocity > 0.9f)
+                {
+                    _fVelocity -= Time.deltaTime * Mathf.Clamp(rotAmount, 1f, 4f) / 3f;
+                }
+            }
         }
         // Move player
         float mag = axisLeft.magnitude;
@@ -604,41 +471,6 @@ public class PlayerController : MonoBehaviour
         // Check jump button
         if ((Input.GetButtonDown("X") || Input.GetKeyDown(KeyCode.Space)))
         {
-            _pressTime = Time.time;
-            // 2nd and third jumps
-            /*if (_jumpIter != 0 && _landTime != -1f && _pressTime - _landTime < _jumpWindow && (!Input.GetKey(KeyCode.LeftShift) || !!Input.GetButton("L1")))
-            {
-                // Second jump
-                if (_jumpIter++ == 1)
-                {
-                    PlaySound(1);
-                    _yVelocity = 1.8f;
-                }
-                // Third jump; make sure is moving to perform
-                else if (_fVelocity > 0.5f)
-                {
-                    PlaySound(2);
-                    _yVelocity = 2.25f;
-                    _jumpIter = 0;
-                }
-                // If failed third jump, do first jump
-                else
-                {
-                    Jump0();
-                }
-                // If third jump not performed, do not play sound
-                if (_yVelocity > 1.5f)
-                {
-                    _pressTime = -1f;
-                    _landTime = -1f;
-                }
-            }
-            else*/
-            /*if (Time.time - _summerTimer < 0.3f && !oppositeStick)
-            {
-                Summersault(false);
-            }
-            else*/
             // First jump
             if (!_airborn)
             {
@@ -650,13 +482,6 @@ public class PlayerController : MonoBehaviour
                     {
                         LongJump();
                     }
-                    // If standing, backflip
-                    /*else
-                    {
-                        _yVelocity = 3f;
-                        _backflipping = true;
-                        PlaySound(7);
-                    }*/
                 }
                 // First jump
                 else
@@ -668,19 +493,19 @@ public class PlayerController : MonoBehaviour
         // Dive / throw
         if (Input.GetButtonDown("Circle") || Input.GetKeyDown("v"))
         {
-            if(!_holding){
+            if (!_holding)
+            {
                 Dive();
             }
         }
-        // Double jump
-        DoubleJump();
         // Apply gravity
         Gravity();
-        
+
         Debug.DrawRay(transform.position, transform.forward * 50f);
     }
-    
-    void Throw(){
+
+    void Throw()
+    {
         _holding = false;
         _anim.SetTrigger("ToggleHold");
         _anim.SetLayerWeight(1, 0f);
@@ -691,36 +516,37 @@ public class PlayerController : MonoBehaviour
         r.velocity = transform.GetComponent<Rigidbody>().velocity;
         r.AddForce((transform.forward * 600f * Mathf.Clamp(_fVelocity, 0.05f, 1f) * (_airborn ? 2f : 3.5f)) + new Vector3(0f, (_airborn ? 3f : 1.5f), 0f) * 220f);
         r.AddTorque(new Vector3(transform.forward.z, 0f, -transform.forward.x) * 100f);
-        _heldItem.gameObject.layer = 0;   
+        _heldItem.gameObject.layer = 0;
         // Fire script
-        if(_heldItem.name.Equals("Hold")){
-            _heldItem.GetComponent<PlayerCube>().OnThrow();
+        PlayerCube script = _heldItem.GetComponent<PlayerCube>();
+        if (script != null)
+        {
+            script.OnThrow();
         }
         // Remove held item
-        _heldItem = null;   
+        _heldItem = null;
+        _throwTimer = Time.time;
     }
 
-    void DoubleJump()
+
+    bool Hold(GameObject holdObject)
     {
-        /*if((Input.GetButtonDown("X") || Input.GetKeyDown(KeyCode.Space)) && _canDoubleJump && !_wallsliding && _airborn)//if ((Input.GetButtonDown("Square") || Input.GetKeyDown(KeyCode.LeftControl)) && _canDoubleJump && !_wallsliding)
+        PlayerCube script = holdObject.GetComponent<PlayerCube>();
+        if (script != null && !_holding && !_diving && Time.time - _throwTimer > 0.2f)
         {
-            // Reset states
-            _canDoubleJump = false;
-            _backflipping = false;
-            _summersaulting = false;
-            _longJumping = false;
-            // Rotate player
-            Camera cam = Camera.main;
-            Vector3 lookPos = (cam.transform.forward * axisLeft.y + cam.transform.right * axisLeft.x);
-            lookPos.y = 0f;
-            Quaternion targetRotation = Quaternion.LookRotation(lookPos);
-            transform.rotation = targetRotation;
-            // Set velocities
-            //_fVelocity = axisLeft.magnitude / 1.2f * _fVelocity;
-            _yVelocity = Mathf.Clamp(_yVelocity + 1.5f, 1f, 1.25f);
-            _jumpIter = 1;
-            PlaySound(13);
-        }*/
+            if (!script.OnHold()) return false;
+            _holding = true;
+            _anim.SetTrigger("ToggleHold");
+            _anim.SetLayerWeight(1, 1f);
+            _heldItem = holdObject.transform;
+            _heldItem.rotation = Quaternion.identity;
+            _heldItem.parent = _anim.transform;
+            _heldItem.localPosition = new Vector3(0f, 1.971f + script.GetSize() / 2f, 0f);
+            _heldItem.GetComponent<Rigidbody>().isKinematic = true;
+            _heldItem.gameObject.layer = 2;
+            return true;
+        }
+        return false;
     }
 
     void Jump0(float yVal = 1.25f)
@@ -729,10 +555,6 @@ public class PlayerController : MonoBehaviour
         _yVelocity = yVal * JumpAttributes._JUMP_MODIFIER;
 
         JumpAttributes._holdTimer = JumpAttributes._HOLDTIMER_SET;
-        //_jumpIter = 1;
-
-        //_anim.SetTrigger("jump0");
-        //_animstate = AnimState.JUMP0;
     }
 
     void LongJump()
@@ -758,20 +580,6 @@ public class PlayerController : MonoBehaviour
         _diving = false;
         _diveTimer = Time.time;
         StopSound(11);
-        _ledgeGrabber.transform.localPosition = new Vector3(0f, 0.6f, 0.51f);
-    }
-
-    void Summersault(bool turn180 = true)
-    {
-        if (turn180)
-        {
-            transform.Rotate(new Vector3(0f, 1f, 0f), 180f);
-        }
-        _yVelocity = 3f;
-        _fVelocity = 1f;
-        PlaySound(8);
-        _jumpIter = 1;
-        _summersaulting = true;
     }
 
     static class JumpAttributes
@@ -791,16 +599,16 @@ public class PlayerController : MonoBehaviour
     void Gravity()
     {
         JumpAttributes._holdTimer -= Time.deltaTime;
-        Debug.Log(JumpAttributes._holdTimer + " : " + _yVelocity);
-        if ((_airborn && _yVelocity > 0.2f && (Input.GetButton("X") || Input.GetKey(KeyCode.Space)) && !_diving && !_wallsliding && !_summersaulting && !_backflipping && !_longJumping) && JumpAttributes._holdTimer > 0f)
+        if ((_airborn && _yVelocity > 0.2f && (Input.GetButton("X") || Input.GetKey(KeyCode.Space)) && !_diving && !_longJumping) && JumpAttributes._holdTimer > 0f)
         {
             _yVelocity = Mathf.Clamp(_yVelocity + Time.deltaTime * JumpAttributes._JUMP_HOLD_MODIFIER, -3f, 10f);
-        }else if(_airborn && _longJumping)
+        }
+        else if (_airborn && _longJumping)
         {
             _yVelocity = Mathf.Clamp(_yVelocity + Time.deltaTime * JumpAttributes._LONGJUMP_HOLD_MODIFIER, -3f, 10f);
         }
         // Apply gravity; slowly reduce yVelocity until negative
-        _yVelocity = Mathf.Clamp(_yVelocity - Time.deltaTime * JumpAttributes._GRAVITY_MODIFIER * (_wallsliding ? (Time.time - _lastWallSlide < 0.3f ? 0f : 0.25f) : 1f) * _gravityModifier, (_wallsliding ? -0.75f : -2.5f), 10f);
+        _yVelocity = Mathf.Clamp(_yVelocity - Time.deltaTime * JumpAttributes._GRAVITY_MODIFIER * _gravityModifier, -2.5f, 10f);
         // If has velocity, add
         if (_yVelocity > 0f)
         {
@@ -842,63 +650,29 @@ public class PlayerController : MonoBehaviour
                         if (h1.collider != null && h1.collider.transform.parent.name.Equals("MPlatform"))
                         {
                             transform.parent = h1.collider.transform.parent;
-							h1.collider.transform.parent.parent.GetComponent<PlatformScript>().OnLand();
+                            h1.collider.transform.parent.parent.GetComponent<PlatformScript>().OnLand();
                         }
                         else if (h2.collider != null && h2.collider.transform.parent.name.Equals("MPlatform"))
                         {
                             transform.parent = h2.collider.transform.parent;
-							h2.collider.transform.parent.parent.GetComponent<PlatformScript>().OnLand();
+                            h2.collider.transform.parent.parent.GetComponent<PlatformScript>().OnLand();
                         }
                         else
                         {
                             transform.parent = GameObject.Find("Game").transform;
                         }
-                        if (!_diving)
-                        {
-                            //_anim.Play("Idle");
-                            //_animstate = AnimState.IDLE;
-                        }
                         // Set airborn
                         _airborn = false;
-                        _canDoubleJump = true;
-                        /*/ Check if jump button pressed before landing
-                        _landTime = Time.time;
-                        _landTime2 = Time.time;
-                        if (_jumpIter != 0 && _pressTime != -1f && _landTime - _pressTime < _jumpWindow)
-                        {
-                            // Second jump
-                            if (_jumpIter++ == 1)
-                            {
-                                PlaySound(1);
-                                _yVelocity = 1.8f;
-                            }
-                            // Third jump; make sure is moving to perform
-                            else if (_fVelocity > 0.2f)
-                            {
-                                PlaySound(2);
-                                _yVelocity = 2.25f;
-                                _jumpIter = 0;
-                            }
-                            // If failed third jump, do first jump
-                            else
-                            {
-                                PlaySound(0);
-                                _yVelocity = 1.25f;
-                                _jumpIter = 1;
-                            }
-                            // If third jump not performed, do not play sound
-                            if (_yVelocity > 1.5f)
-                            {
-                                _pressTime = -1f;
-                                _landTime = -1f;
-                            }
-                        }*/
                     }
                     // If not in air, check ground for objects
-                    else{
-                        if(h1.collider != null){
+                    else
+                    {
+                        if (h1.collider != null)
+                        {
                             CheckFloor(h1.collider);
-                        }else if(h2.collider != null){
+                        }
+                        else if (h2.collider != null)
+                        {
                             CheckFloor(h2.collider);
                         }
                     }
@@ -924,28 +698,33 @@ public class PlayerController : MonoBehaviour
             }
         }
     }
-    
+
     float ti = 0f;
-    void CheckFloor(Collider c){
-        switch(c.name){
-            case("Summoner"):
+    void CheckFloor(Collider c)
+    {
+        switch (c.name)
+        {
+            case ("Summoner"):
                 _Checkpoint = c.transform.position;
                 ti += Time.deltaTime;
-            
+
                 _holdRB.AddTorque(_holdRB.velocity * 20f);
                 float forceMod = 1f;
-                if((Vector3.Distance(_holdRB.position, c.transform.position) < 30f)){
+                if ((Vector3.Distance(_holdRB.position, c.transform.position) < 30f))
+                {
                     _holdRB.drag = 5f;
                     forceMod = 0.5f;
                 }
 
-                if(Vector2.Distance(new Vector2(_holdRB.position.x, _holdRB.position.z), new Vector2(c.transform.position.x, c.transform.position.z)) > 10f){                    
-                    if(ti > 1f){
+                if (Vector2.Distance(new Vector2(_holdRB.position.x, _holdRB.position.z), new Vector2(c.transform.position.x, c.transform.position.z)) > 10f)
+                {
+                    if (ti > 1f)
+                    {
                         _holdRB.AddForce(new Vector3(0f, 1f, 0f) * 1000f);
                         ti = 0f;
                     }
                 }
-                
+
                 _holdRB.AddForce((c.transform.position - _holdRB.position + new Vector3(0f, 4f, 0f)).normalized * 150f * forceMod);
                 _holdRB.useGravity = false;
                 break;
@@ -965,7 +744,7 @@ public class PlayerController : MonoBehaviour
             {
                 // Check for hold
                 Hold(h1.collider.gameObject);
-                
+
                 movePos.x = 0f;
                 float sign = -Mathf.Sign(h1.point.x - transform.position.x);
                 transform.position = new Vector3(h1.point.x + (dist - 0.05f) * sign, transform.position.y, transform.position.z);
@@ -994,7 +773,7 @@ public class PlayerController : MonoBehaviour
             {
                 // Check for hold
                 Hold(h1.collider.gameObject);
-                
+
                 movePos.z = 0f;
                 float sign = -Mathf.Sign(h1.point.z - transform.position.z);
                 transform.position = new Vector3(transform.position.x, transform.position.y, h1.point.z + (dist - 0.05f) * sign);
@@ -1019,26 +798,6 @@ public class PlayerController : MonoBehaviour
         }
 
         transform.position += movePos * Time.deltaTime;
-    }
-
-    bool Hold(GameObject holdObject)
-    {
-        PlayerCube script = holdObject.GetComponent<PlayerCube>();
-        if (script != null && !_holding && !_diving)
-        {
-            if (!script.OnHold()) return false;
-            _holding = true;
-            _anim.SetTrigger("ToggleHold");
-            _anim.SetLayerWeight(1, 1f);
-            _heldItem = holdObject.transform;
-            _heldItem.rotation = Quaternion.identity;
-            _heldItem.parent = _anim.transform;
-            _heldItem.localPosition = new Vector3(0f, 1.971f + script.GetSize() / 2f, 0f);
-            _heldItem.GetComponent<Rigidbody>().isKinematic = true;
-            _heldItem.gameObject.layer = 2;
-            return true;
-        }
-        return false;
     }
 
     void PlaySound(int index, bool mainSound = true)
@@ -1069,78 +828,4 @@ public class PlayerController : MonoBehaviour
     {
         return transform.GetChild(0).GetChild(index).GetComponent<AudioSource>().isPlaying;
     }
-
-    // Check for ledge grabs
-    private void OnTriggerEnter(Collider c)
-    {
-        if (!_hanging && _airborn && c.name.Equals("Edge") && Time.time - _lastLedgeGrab > 0.3f)
-        {
-            // Check for moving platforms
-            if (c.transform.parent.name.Equals("MPlatform"))
-            {
-                transform.parent = c.transform.parent;
-				c.transform.parent.parent.GetComponent<PlatformScript>().OnLand();
-            }
-            else
-            {
-                transform.parent = GameObject.Find("Game").transform;
-            }
-            Vector3 look = c.ClosestPoint(transform.position + new Vector3(0f, 1f, 0f));
-            look.y = transform.position.y;
-            transform.LookAt(look);
-            transform.position = new Vector3(transform.position.x, c.transform.position.y - 1f, transform.position.z);
-            _hanging = true;
-            PlaySound(3);
-            _longJumping = false;
-            _backflipping = false;
-            _summersaulting = false;
-            StopDiving();
-            _hitWall = false;
-            if (_wallsliding)
-            {
-                _wallsliding = false;
-                _anim.transform.Rotate(new Vector3(0f, 180f, 0f));
-            }
-            _jumpIter = 0;
-            StopSound(11);
-            _canDoubleJump = true;
-            _fVelocity = 0f;
-            _yVelocity = 0f;
-        }
-    }
-
-    /*/ Check for wall slide
-    private void OnTriggerStay(Collider c)
-    {
-        if (_airborn && !c.name.Equals("Edge") && axisLeft.magnitude != 0f && _yVelocity < 0.2f && Time.time - _lastWallSlide > 0.3f && !_diving && !_longJumping && !_hitWall && !_wallsliding && !_hanging)
-        {
-            // Check for moving platforms
-            if (c.transform.parent.name.Equals("MPlatform"))
-            {
-                transform.parent = c.transform.parent;
-				c.transform.parent.parent.GetComponent<PlatformScript>().OnLand();
-            }
-            else
-            {
-                transform.parent = GameObject.Find("Game").transform;
-            }
-            _lastWallSlide = Time.time;
-            Vector3 look = c.ClosestPoint(transform.position + new Vector3(0f, 1f, 0f));
-            look.y = transform.position.y;
-            transform.LookAt(look);
-            _backflipping = false;
-            _summersaulting = false;
-            _wallsliding = true;
-            _jumpIter = 0;
-            _fVelocity = 0f;
-            _yVelocity = 0f;
-            PlaySound(11, false);
-        }
-    }*/
-
-    private void OnCollisionEnter(Collision collision)
-    {
-
-    }
-
 }
