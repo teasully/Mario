@@ -293,3 +293,13 @@ sysinfo.txt
 # Builds
 *.apk
 *.unitypackage
+/Assets/Blend
+/Assets/Scenes
+/Assets/Prefabs
+/Assets/Audio
+/Assets/Images
+/Assets/Materials
+/Assets/New Animator Controller.controller
+/Assets/New Avatar Mask.mask
+/ProjectSettings
+/UnityPackageManager

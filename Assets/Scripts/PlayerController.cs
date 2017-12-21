@@ -1,0 +1,1146 @@
+﻿using System.Collections;
+using System.Collections.Generic;
+using UnityEngine;
+
+public class PlayerController : MonoBehaviour
+{
+	static bool _KEYBOARD = false;
+
+    public static PlayerController _Player;
+
+    float _yVelocity = -1f, _fVelocity,
+        _landTime, _landTime2, _pressTime,
+        _jumpWindow = 0.08f, // Used to determine double/triple jumps
+        _throwTimer;
+    public float _gravityModifier = 1f;
+    Vector3 _dir, _look, _movePos;
+
+    Vector2 axisLeft, _axisLeft2;
+
+    int _jumpIter;
+
+    bool _airborn, _hanging, _longJumping, _diving, _backflipping, _wallsliding, _summersaultSliding, _summersaulting, _hitWall, _canDoubleJump, _holding;
+
+    AudioSource _currentSound;
+
+    ParticleSystem _runTrail;
+
+    Animator _anim;
+
+    Transform _ledgeGrabber, _heldItem;
+    
+    Rigidbody _holdRB;
+    Vector3 _Checkpoint;
+    PlayerCube _holdScript, _checkcubeScript;
+
+    MeshRenderer _throwGuess;
+
+    void Start()
+    {
+        _Player = this;
+
+        _look = transform.position + transform.forward;
+
+        _camPos = transform.position - ((transform.position - _camPosDesired).normalized * _camDistance) + Vector3.up * _camHeight;
+        _camPosDesired = _camPos;
+
+        _runTrail = transform.GetChild(1).GetComponent<ParticleSystem>();
+
+        _anim = GameObject.Find("man").GetComponent<Animator>();//transform.GetChild(4).GetComponent<Animator>();
+
+        _ledgeGrabber = transform.GetChild(2);
+        
+        _holdRB = GameObject.Find("Hold").GetComponent<Rigidbody>();
+        _holdRB.sleepThreshold = 0f;
+        
+        _Checkpoint = _holdRB.transform.position;
+        _checkcubeScript = _holdRB.transform.GetComponent<PlayerCube>();
+
+        _throwGuess = GameObject.Find("Estimate").GetComponent<MeshRenderer>();
+        _throwGuess.enabled = false;
+    }
+
+    private void LateUpdate()
+    {
+        Camera cam = Camera.main;
+        Vector2 axisRight = Vector2.zero;
+        if (_KEYBOARD)
+        {
+            if (Input.GetKey("up"))
+            {
+                axisRight.y = 1f;
+            }
+            if (Input.GetKey("down"))
+            {
+                axisRight.y = -1f;
+            }
+            if (Input.GetKey("left"))
+            {
+                axisRight.x = -1f;
+            }
+            if (Input.GetKey("right"))
+            {
+                axisRight.x = 1f;
+            }
+        }
+        else
+        {
+            axisRight = new Vector2(Input.GetAxis("Horizontal2"), Input.GetAxis("Vertical2"));
+        }
+        // Handle camera position
+        if (Mathf.Abs(axisLeft.x) > 0.15f)
+        {
+            _camPosDesired += (transform.position + (-transform.forward * 20f) - _camPosDesired) * Time.deltaTime * Mathf.Abs(axisLeft.x) * 0.4f;
+        }
+        float r2 = (Input.GetAxis("R2") + 1f) / 2f;
+        if (_KEYBOARD) r2 = 0f;
+        if (r2 > 0.1f)
+        {
+            _camPosDesired += (transform.position + (-transform.forward * 20f) - _camPosDesired) * Time.deltaTime * 20f;
+        }
+        // Move camera left and right
+        if (Mathf.Abs(axisRight.x) > 0.2f)
+        {
+            _camPosDesired += axisRight.x * cam.transform.right * Time.deltaTime * 100f;
+        }
+        // Make sure _camPosDesired stays within certain distance
+        _camPosDesired += ((transform.position - (transform.position - _camPosDesired).normalized * _camDistance) - _camPosDesired) * Time.deltaTime * 5f;
+        // Handle camera height
+        if (Mathf.Abs(axisRight.y) > 0.2f)
+        {
+            _camHeight += axisRight.y * Time.deltaTime * 45f;
+        }
+        // Interpolate camera for smoothness
+        Vector3 xz = (transform.position - _camPosDesired);
+        xz.y = 0f;
+        _camPos = _anim.transform.position - xz.normalized * _camDistance + Vector3.up * _camHeight;
+        cam.transform.position += (_camPos - cam.transform.position) * Time.deltaTime * 5f;
+       // cam.transform.position += (new Vector3(transform.position.x, transform.position.y + 10f, cam.transform.position.z) - cam.transform.position) * Time.deltaTime * 5f;
+        // Move camera look with player
+        Vector3 forw = cam.transform.forward;
+        forw.y = 0f;
+        _lookPosDesired = transform.position + transform.forward * 5f;//Vector3.Lerp(transform.position, _holdRB.position, 0.25f);// + cam.transform.right * _axisLeft2.x * 8f + forw.normalized * _axisLeft2.y * 15f + transform.up * Mathf.Clamp(_yVelocity, -1.5f, 3f) * 5f;
+        Debug.DrawLine(transform.position, _lookPosDesired);
+        _lookPos += (_lookPosDesired - _lookPos) * Time.deltaTime * 4f;
+        cam.transform.LookAt(_lookPos);
+        // Check particles
+        if ((_fVelocity > 0.3f && !_airborn) || (_diving && !_airborn) || (_summersaultSliding && !_airborn))
+        {
+            if (!_runTrail.isEmitting)
+            {
+                _runTrail.Play();
+            }
+        }
+        else if (_runTrail.isEmitting)
+        {
+            _runTrail.Stop();
+        }
+
+        _anim.transform.position += -(_anim.transform.position - (transform.position - Vector3.up)) * Time.deltaTime * 20f;
+        Quaternion r = transform.rotation;
+        r.eulerAngles = new Vector3(_anim.transform.eulerAngles.x, r.eulerAngles.y + 90f, r.eulerAngles.z);
+        _anim.transform.rotation = Quaternion.Lerp(_anim.transform.rotation, r, Time.deltaTime * (_wallsliding || _summersaultSliding || _airborn || Time.time - _summerTimer < 0.3f ? 6f : 100f));
+
+        // TRY and predict throwing using physics shit
+        // r.AddForce((transform.forward * 600f * Mathf.Clamp(_fVelocity, 0.05f, 1f) * (_airborn ? 2f : 3.5f)) + new Vector3(0f, (_airborn ? 3f : 1.5f), 0f) * 250f);
+        _throwGuess.transform.position -= (_throwGuess.transform.position - (transform.position + transform.up + (((transform.forward * 600f * Mathf.Clamp(_fVelocity, 0.05f, 1f) * (_airborn ? 2f : 3.5f)) + new Vector3(0f, (_airborn ? 3f : 1.5f), 0f) * 250f).normalized * 20f * _fVelocity))) * Time.deltaTime * 8f;
+        if (_holding)
+        {
+            _throwGuess.enabled = true;
+        }
+        else
+        {
+            _throwGuess.enabled = false;
+        }
+    }
+
+    float _lookIter, _camDistance = 10f, _camHeight = 8f, _lastWallSlide, _lastLedgeGrab, _airTime, _maxClamp, _distanceTraveled, _diveTimer, _summerTimer;
+    float _xTilt;
+    Vector3 _lookPos, _lookPosDesired, _camPos, _camPosDesired, _lastPos;
+
+    public void Step()
+    {
+        if (_airborn) return;
+        PlaySound(10, false);
+    }
+
+    AnimState _animstate;
+
+    enum AnimState
+    {
+        JUMP0,
+        RUN,
+        IDLE,
+        HANGING,
+        DIVING,
+        WALLSLIDE,
+        SLIDING
+    }
+
+    // Update is called once per frame
+    void Update()
+    {
+        // Set animation variables in anim
+        _anim.SetFloat("movespeed", _fVelocity);
+        _anim.SetFloat("runmod", 1f);
+        _anim.SetFloat("gravity", _yVelocity);
+        _anim.SetBool("airborn", _airborn);
+
+        _anim.SetBool("wallslide", _wallsliding);
+        // Check if holding; orient and check throw
+        _holdRB.useGravity = true;
+        _holdRB.drag = 0.1f;
+        if (_holding){
+            _heldItem.localRotation = Quaternion.identity;
+            if(Input.GetKeyDown(KeyCode.E) || Input.GetButtonDown("Square")){
+                Throw();
+                _throwTimer = Time.time;
+            }
+        }else{
+            if(Input.GetKeyDown(KeyCode.E) || Input.GetButtonDown("Square")){
+                _checkcubeScript.Press();
+            }
+        }
+        
+        if (_diving)
+        {
+			_anim.SetBool("run", false);
+            if (_animstate != AnimState.DIVING)
+            {
+                _animstate = AnimState.DIVING;
+                _anim.SetTrigger("dive");
+            }
+        }
+        else if (_wallsliding)
+        {
+            //_animstate = AnimState.WALLSLIDE;
+        }
+        else if (_summersaultSliding)
+        {
+            if (_animstate != AnimState.SLIDING)
+            {
+                _animstate = AnimState.SLIDING;
+                _anim.SetTrigger("slide");
+            }
+        }
+        else if (_hanging)
+        {
+            _anim.Play("Hang");
+            _animstate = AnimState.HANGING;
+        }
+        else if (!_airborn && _fVelocity > 0.001f)
+        {
+            if (_animstate != AnimState.RUN)
+            {
+                _anim.SetTrigger("run");
+                _animstate = AnimState.RUN;
+            }
+        }
+        else if (!_airborn)
+        {
+            if (_animstate != AnimState.IDLE)
+            {
+                _anim.SetTrigger("idle");
+                _animstate = AnimState.IDLE;
+            }
+        }
+        else
+        {
+            _anim.SetBool("run", false);
+            if (_jumpIter == 0)
+            {
+                _anim.Play("Jump0", 0, 1f - (Mathf.Clamp(_yVelocity, -2.5f, 2.3f) + 2.4f) / 8f);
+            }
+        }
+        // Check if below map
+        if (transform.position.y < -20)
+        {
+            if(_holding){
+                transform.position = _Checkpoint + new Vector3(0f, 5f, 0f);
+            }
+            else{
+                transform.position = _holdRB.position + new Vector3(0f, 3f, 0f);  
+                _fVelocity = 0f;                
+            }             
+        }
+        // Check if below map
+        if (_holdRB.position.y < -20)
+        {
+            _holdRB.position = _Checkpoint + new Vector3(0f, 10f, 0f);
+            _holdRB.velocity = Vector3.zero;
+        }
+        /*/ Scream if falling
+        if (_airborn && _yVelocity < 0f && !_hanging && !_wallsliding)
+        {
+            _airTime += Time.deltaTime;
+            if (_airTime > 2.25f && !SoundPlaying(9))
+            {
+                PlaySound(9);
+                _airTime -= 10f;
+            }
+        }
+        else if (_airTime != 0f)
+        {
+            _airTime = 0f;
+        }*/
+        // Tilt
+        if (Mathf.Abs(axisLeft.x) > 0.1f && !_hanging && !_airborn && !_summersaultSliding)
+        {
+            _xTilt += (20f * axisLeft.x - _xTilt) * Time.deltaTime * 3f;
+        }
+        else
+        {
+            _xTilt += (-_xTilt) * Time.deltaTime * 3f;
+        }
+        Quaternion q = _anim.transform.localRotation;
+        Vector3 e = q.eulerAngles;
+        e.x = _xTilt;
+        q.eulerAngles = e;
+        _anim.transform.localRotation = q;
+        // Check if hit a wall: fall until ground
+        if (_hitWall)
+        {
+            Gravity();
+            MovePosition(-transform.forward * 5f);
+            if (!_airborn)
+            {
+                _hitWall = false;
+            }
+            return;
+        }
+        axisLeft = Vector2.zero;
+        if (_KEYBOARD)
+        {
+            if (Input.GetKey("w"))
+            {
+                axisLeft.y = 1f;
+            }
+            if (Input.GetKey("s"))
+            {
+                axisLeft.y = -1f;
+            }
+            if (Input.GetKey("a"))
+            {
+                axisLeft.x = -1f;
+            }
+            if (Input.GetKey("d"))
+            {
+                axisLeft.x = 1f;
+            }
+        }
+        else axisLeft = new Vector2(Input.GetAxis("Horizontal"), Input.GetAxis("Vertical"));
+        if (axisLeft.magnitude < 0.1f) axisLeft = Vector2.zero;
+        _axisLeft2 += (axisLeft - _axisLeft2) * Time.deltaTime * (_wallsliding ? 20f : 2f);
+        // Check if pushing stick in opposite dir
+        Vector3 fo = transform.forward,
+            mu = Quaternion.Euler(0f, Camera.main.transform.rotation.eulerAngles.y, 0f) * new Vector3(axisLeft.x, 0f, axisLeft.y).normalized;
+        //Debug.DrawRay(transform.position, fo * 20f, Color.blue);
+        //Debug.DrawRay(transform.position, mu * 20f, Color.red);
+        bool oppositeStick = false;
+        bool onSlippery = false;
+        if ((fo - mu).magnitude > 1.7f)
+        {
+            oppositeStick = true;
+        }
+        // Lerp _maxClamp: used to clamp _fVelocity
+        float maxF = 1f;
+        if (axisLeft.magnitude < 0.6f && !_airborn)
+        {
+            if (axisLeft.magnitude < 0.3f)
+            {
+                _maxClamp += (0.15f - _maxClamp) * Time.deltaTime * 3f;
+            }
+            else
+            {
+                _maxClamp += (0.3f - _maxClamp) * Time.deltaTime * 3f;
+            }
+        }
+        else
+        {
+            maxF = 1.25f;
+            _maxClamp += (maxF - _maxClamp) * Time.deltaTime * 3f;
+        }
+        // If diving, only slow down on floor
+        if (_diving)
+        {
+            if (!_airborn) _fVelocity = Mathf.Clamp(_fVelocity - Time.deltaTime * (oppositeStick ? 2f : 0.5f) + Time.deltaTime * (onSlippery ? 4.5f : 0f), 0f, 1f);
+            if (axisLeft.magnitude > 0f && !_airborn && !oppositeStick)
+            {
+                Camera cam = Camera.main;
+                Vector3 lookPos = (cam.transform.forward * axisLeft.y + cam.transform.right * axisLeft.x);
+                lookPos.y = 0f;
+                Quaternion targetRotation = Quaternion.LookRotation(lookPos);
+                transform.rotation = Quaternion.Slerp(transform.rotation, targetRotation, 1f * Time.deltaTime * _fVelocity);
+            }
+            // Move grabber
+            _ledgeGrabber.transform.localPosition = new Vector3(0f, -0.514f, 1.157f);
+        }
+        else if (_summersaultSliding)
+        {
+            //Debug.Log("Sliding");
+            Gravity();
+            _fVelocity = Mathf.Clamp(_fVelocity - Time.deltaTime * 2f, 0f, 5f);
+            MovePosition(transform.forward * 15f * _fVelocity);
+            GetSound(11).pitch = 0.9f;
+            /*/ Jump while sliding
+            if (Input.GetButtonDown("X") || Input.GetKeyDown(KeyCode.Space))
+            {
+                // Normal jump if not opposite
+                if (!oppositeStick || Time.time - _landTime2 < 0.3f)
+                {
+                    Jump0();
+                }
+                // Summersault
+                else
+                {
+                    // Rotate player 180 degrees
+                    Summersault();
+                }
+                _summersaultSliding = false;
+                _summerTimer = Time.time;
+                StopSound(11);
+            }*/
+            if (_fVelocity < 0.1f || _airborn)
+            {
+                _summersaultSliding = false;
+                _summerTimer = Time.time;
+                if (!_airborn)
+                {
+                    transform.Rotate(new Vector3(0f, 1f, 0f), 180f);
+                }
+                StopSound(11);
+            }
+            return;
+        }
+        // Else, speed up if input
+        else if (axisLeft.magnitude != 0f)
+        {
+            //Debug.DrawRay(transform.position, fo * 20f, Color.blue);
+            //Debug.DrawRay(transform.position, mu * 20f, Color.red);
+            if (oppositeStick)
+            {
+                if (!_airborn && _fVelocity > 0.2f && Time.time - _diveTimer > 0.1f)
+                {
+                    _summersaultSliding = true;
+                    PlaySound(11, false);
+                }
+                else _fVelocity = Mathf.Clamp(_fVelocity - Time.deltaTime * (_airborn ? 0.75f : 2f), 0f, 5f);
+            }
+            else if (_fVelocity <= _maxClamp)
+            {
+                _fVelocity = Mathf.Clamp(_fVelocity + Time.deltaTime * (_airborn ? 0.1f : 1f), 0f, _maxClamp);
+            }
+            else if (!_airborn)
+            {
+                _fVelocity = Mathf.Clamp(_fVelocity - Time.deltaTime * 4f, 0f, 5f);
+            }
+        }
+        // Else slow down normally
+        else if (!_airborn)
+        {
+            _fVelocity = Mathf.Clamp(_fVelocity - Time.deltaTime * 4f, 0f, 5f);
+        }
+        // Hanging on edge
+        if (_hanging)
+        {
+            if (Input.GetButtonDown("X") || Input.GetKeyDown(KeyCode.Space))
+            {
+                _hanging = false;
+                _lastLedgeGrab = Time.time;
+                _wallsliding = false;
+                Jump0(1.5f);
+                _fVelocity = 0.3f;
+                transform.parent = GameObject.Find("Game").transform;
+                //_anim.transform.Rotate(new Vector3(0f, 180f, 0f));
+            }
+            return;
+        }
+        // Long jumping
+        else if (_longJumping)
+        {
+            Gravity();
+            DoubleJump();
+            Vector3 addPos = Camera.main.transform.forward * _axisLeft2.y + Camera.main.transform.right * _axisLeft2.x;
+            addPos.y = 0f;
+            MovePosition(transform.forward * 20f * Mathf.Clamp(_fVelocity, 0f, 10f) + addPos * 10f * _fVelocity);
+            if (!_airborn)
+            {
+                _longJumping = false;
+            }
+            return;
+        }
+        // Diving
+        else if (_diving)
+        {
+            Gravity();
+            MovePosition(transform.forward * 20f * _fVelocity);
+            GetSound(11).pitch = (0.7f + _fVelocity) * (_airborn ? 0f : 1f);
+            // Check for jump after dive
+            if (!_airborn && _fVelocity > 0.2f && (Input.GetButtonDown("X") || Input.GetKeyDown(KeyCode.Space)))
+            {
+                StopDiving();
+                if (axisLeft.magnitude > 0.1f && !oppositeStick)
+                {
+                    _fVelocity = 1.25f;
+                    Jump0();
+                }
+                else
+                {
+                    _fVelocity = 0.4f;
+                    Jump0(1.5f);
+                }
+            }
+            if (!_airborn && _fVelocity <= 0.1f)
+            {
+                StopDiving();
+            }
+            return;
+        }
+        // Back-flipping
+        else if (_backflipping)
+        {
+            Gravity();
+            DoubleJump();
+            Vector3 addPos = Camera.main.transform.forward * _axisLeft2.y + Camera.main.transform.right * _axisLeft2.x;
+            addPos.y = 0f;
+            MovePosition(addPos * 5f - transform.forward * 4f);
+            if (!_airborn)
+            {
+                _backflipping = false;
+                _fVelocity /= 5f;
+            }
+            // Check dive
+            if (Input.GetButtonDown("Circle") || Input.GetKeyDown("v"))
+            {
+                _backflipping = false;
+                Dive();
+            }
+            return;
+        }
+        // Summersaulting
+        else if (_summersaulting)
+        {
+            Gravity();
+            DoubleJump();
+            Vector3 addPos = Camera.main.transform.forward * _axisLeft2.y + Camera.main.transform.right * _axisLeft2.x;
+            addPos.y = 0f;
+            MovePosition(addPos * 8f * _fVelocity + transform.forward * 6f);
+            if (!_airborn)
+            {
+                _summersaulting = false;
+                _fVelocity /= 5f;
+            }
+            // Check dive
+            if (Input.GetButtonDown("Circle") || Input.GetKeyDown("v"))
+            {
+                _summersaulting = false;
+                Dive();
+            }
+            return;
+        }
+        // Wall sliding
+        else if (_wallsliding)
+        {
+            Gravity();
+            GetSound(11).pitch = 0.25f + Mathf.Abs(_yVelocity);
+            // Jump off sliding wall
+            if ((Input.GetButtonDown("X") || Input.GetKeyDown(KeyCode.Space)))
+            {
+                // Rotate player 180 degrees
+                transform.Rotate(new Vector3(0f, 1f, 0f), 180f);
+                _fVelocity = 1f;
+                _wallsliding = false;
+                Jump0(1.5f);
+                StopSound(11);
+                PlaySound(12, false);
+                transform.parent = GameObject.Find("Game").transform;
+                _anim.transform.Rotate(new Vector3(0f, 180f, 0f));
+            }
+            if (!_airborn || _axisLeft2.magnitude == 0f)
+            {
+                _wallsliding = false;
+                transform.parent = GameObject.Find("Game").transform;
+                StopSound(11);
+                _anim.transform.Rotate(new Vector3(0f, 180f, 0f));
+            }
+            return;
+        }
+        // Rotate player with left stick
+        if (axisLeft.magnitude > 0f && !_airborn)
+        {
+            Camera cam = Camera.main;
+            Vector3 lookPos = (cam.transform.forward * axisLeft.y + cam.transform.right * axisLeft.x);
+            lookPos.y = 0f;
+            Quaternion targetRotation = Quaternion.LookRotation(lookPos);
+            if (axisLeft.magnitude < 0.11f && _fVelocity < 0.1f)
+                transform.rotation = targetRotation;
+            else {
+				Quaternion rot = transform.rotation;
+				transform.rotation = Quaternion.Slerp(transform.rotation, targetRotation, 5f * Time.deltaTime);
+				// Calculate amount rotated and slow player
+				float rotAmount = Mathf.Abs(rot.eulerAngles.y - transform.rotation.eulerAngles.y);
+				if(!_airborn && rotAmount > 1f && _fVelocity > 0.9f){
+					_fVelocity -= Time.deltaTime * Mathf.Clamp(rotAmount, 1f, 4f) / 3f;
+				}
+			}
+        }
+        // Move player
+        float mag = axisLeft.magnitude;
+        if (mag == 0 && _fVelocity != 0f)
+        {
+            mag = 0.5f;
+        }
+        // If in air, do not give complete control
+        if (_airborn)
+        {
+            Vector3 addPos = Camera.main.transform.forward * _axisLeft2.y + Camera.main.transform.right * _axisLeft2.x;
+            addPos.y = 0f;
+            MovePosition((_fVelocity > 0.2f ? transform.forward * 10f * _fVelocity + addPos * 10f * _fVelocity : addPos * 20f * (_fVelocity + 0.4f)));
+        }
+        else
+        {
+            MovePosition(transform.forward * 15f * _fVelocity);
+        }
+        // Check jump button
+        if ((Input.GetButtonDown("X") || Input.GetKeyDown(KeyCode.Space)))
+        {
+            _pressTime = Time.time;
+            // 2nd and third jumps
+            /*if (_jumpIter != 0 && _landTime != -1f && _pressTime - _landTime < _jumpWindow && (!Input.GetKey(KeyCode.LeftShift) || !!Input.GetButton("L1")))
+            {
+                // Second jump
+                if (_jumpIter++ == 1)
+                {
+                    PlaySound(1);
+                    _yVelocity = 1.8f;
+                }
+                // Third jump; make sure is moving to perform
+                else if (_fVelocity > 0.5f)
+                {
+                    PlaySound(2);
+                    _yVelocity = 2.25f;
+                    _jumpIter = 0;
+                }
+                // If failed third jump, do first jump
+                else
+                {
+                    Jump0();
+                }
+                // If third jump not performed, do not play sound
+                if (_yVelocity > 1.5f)
+                {
+                    _pressTime = -1f;
+                    _landTime = -1f;
+                }
+            }
+            else*/
+            /*if (Time.time - _summerTimer < 0.3f && !oppositeStick)
+            {
+                Summersault(false);
+            }
+            else*/
+            // First jump
+            if (!_airborn)
+            {
+                // Check for long jump
+                if (Input.GetButton("L1") || Input.GetKey(KeyCode.LeftShift))
+                {
+                    // If moving, long jump
+                    if (_fVelocity > 0.5f)
+                    {
+                        LongJump();
+                    }
+                    // If standing, backflip
+                    /*else
+                    {
+                        _yVelocity = 3f;
+                        _backflipping = true;
+                        PlaySound(7);
+                    }*/
+                }
+                // First jump
+                else
+                {
+                    Jump0();
+                }
+            }
+        }
+        // Dive / throw
+        if (Input.GetButtonDown("Circle") || Input.GetKeyDown("v"))
+        {
+            if(!_holding){
+                Dive();
+            }
+        }
+        // Double jump
+        DoubleJump();
+        // Apply gravity
+        Gravity();
+        
+        Debug.DrawRay(transform.position, transform.forward * 50f);
+    }
+    
+    void Throw(){
+        _holding = false;
+        _anim.SetTrigger("ToggleHold");
+        _anim.SetLayerWeight(1, 0f);
+        _heldItem.parent = GameObject.Find("Game").transform;
+        // Add forces
+        Rigidbody r = _heldItem.GetComponent<Rigidbody>();
+        r.isKinematic = false;
+        r.velocity = transform.GetComponent<Rigidbody>().velocity;
+        r.AddForce((transform.forward * 600f * Mathf.Clamp(_fVelocity, 0.05f, 1f) * (_airborn ? 2f : 3.5f)) + new Vector3(0f, (_airborn ? 3f : 1.5f), 0f) * 220f);
+        r.AddTorque(new Vector3(transform.forward.z, 0f, -transform.forward.x) * 100f);
+        _heldItem.gameObject.layer = 0;   
+        // Fire script
+        if(_heldItem.name.Equals("Hold")){
+            _heldItem.GetComponent<PlayerCube>().OnThrow();
+        }
+        // Remove held item
+        _heldItem = null;   
+    }
+
+    void DoubleJump()
+    {
+        /*if((Input.GetButtonDown("X") || Input.GetKeyDown(KeyCode.Space)) && _canDoubleJump && !_wallsliding && _airborn)//if ((Input.GetButtonDown("Square") || Input.GetKeyDown(KeyCode.LeftControl)) && _canDoubleJump && !_wallsliding)
+        {
+            // Reset states
+            _canDoubleJump = false;
+            _backflipping = false;
+            _summersaulting = false;
+            _longJumping = false;
+            // Rotate player
+            Camera cam = Camera.main;
+            Vector3 lookPos = (cam.transform.forward * axisLeft.y + cam.transform.right * axisLeft.x);
+            lookPos.y = 0f;
+            Quaternion targetRotation = Quaternion.LookRotation(lookPos);
+            transform.rotation = targetRotation;
+            // Set velocities
+            //_fVelocity = axisLeft.magnitude / 1.2f * _fVelocity;
+            _yVelocity = Mathf.Clamp(_yVelocity + 1.5f, 1f, 1.25f);
+            _jumpIter = 1;
+            PlaySound(13);
+        }*/
+    }
+
+    void Jump0(float yVal = 1.25f)
+    {
+        PlaySound(0);
+        _yVelocity = yVal * JumpAttributes._JUMP_MODIFIER;
+
+        JumpAttributes._holdTimer = JumpAttributes._HOLDTIMER_SET;
+        //_jumpIter = 1;
+
+        //_anim.SetTrigger("jump0");
+        //_animstate = AnimState.JUMP0;
+    }
+
+    void LongJump()
+    {
+        _yVelocity = JumpAttributes._LONGJUMP_MODIFIER;
+        _longJumping = true;
+        _fVelocity = 1f;
+        PlaySound(4);
+    }
+
+    void Dive()
+    {
+        _diving = true;
+        _fVelocity = 1.25f;
+        _yVelocity = 0.8f;
+        PlaySound(5);   // Voice
+        PlaySound(11, false);  // Slide noise
+    }
+
+    void StopDiving()
+    {
+        if (!_diving) return;
+        _diving = false;
+        _diveTimer = Time.time;
+        StopSound(11);
+        _ledgeGrabber.transform.localPosition = new Vector3(0f, 0.6f, 0.51f);
+    }
+
+    void Summersault(bool turn180 = true)
+    {
+        if (turn180)
+        {
+            transform.Rotate(new Vector3(0f, 1f, 0f), 180f);
+        }
+        _yVelocity = 3f;
+        _fVelocity = 1f;
+        PlaySound(8);
+        _jumpIter = 1;
+        _summersaulting = true;
+    }
+
+    static class JumpAttributes
+    {
+        // Used to decrease player's y vel
+        public static float _GRAVITY_MODIFIER = 10f,
+            // Used for jumping
+            _JUMP_MODIFIER = 1.5f,
+            // Used for holding down jump button
+            _JUMP_HOLD_MODIFIER = 7f,
+            _holdTimer, _HOLDTIMER_SET = 0.25f,
+            // Used for longjumping
+            _LONGJUMP_MODIFIER = 1.25f,
+            _LONGJUMP_HOLD_MODIFIER = 7.5f;
+    }
+
+    void Gravity()
+    {
+        JumpAttributes._holdTimer -= Time.deltaTime;
+        Debug.Log(JumpAttributes._holdTimer + " : " + _yVelocity);
+        if ((_airborn && _yVelocity > 0.2f && (Input.GetButton("X") || Input.GetKey(KeyCode.Space)) && !_diving && !_wallsliding && !_summersaulting && !_backflipping && !_longJumping) && JumpAttributes._holdTimer > 0f)
+        {
+            _yVelocity = Mathf.Clamp(_yVelocity + Time.deltaTime * JumpAttributes._JUMP_HOLD_MODIFIER, -3f, 10f);
+        }else if(_airborn && _longJumping)
+        {
+            _yVelocity = Mathf.Clamp(_yVelocity + Time.deltaTime * JumpAttributes._LONGJUMP_HOLD_MODIFIER, -3f, 10f);
+        }
+        // Apply gravity; slowly reduce yVelocity until negative
+        _yVelocity = Mathf.Clamp(_yVelocity - Time.deltaTime * JumpAttributes._GRAVITY_MODIFIER * (_wallsliding ? (Time.time - _lastWallSlide < 0.3f ? 0f : 0.25f) : 1f) * _gravityModifier, (_wallsliding ? -0.75f : -2.5f), 10f);
+        // If has velocity, add
+        if (_yVelocity > 0f)
+        {
+            RaycastHit h;
+            if (Physics.Raycast(transform.position + new Vector3(0f, 0.75f, 0f), transform.up, out h))
+            {
+                // Check for hold and distance
+                if (!Hold(h.collider.gameObject) && h.distance <= 0.25f)
+                {
+                    _yVelocity = -0.25f;
+                }
+            }
+            transform.position += new Vector3(0f, 1f, 0f) * Time.deltaTime * _yVelocity * 10f;
+            if (!_airborn)
+            {
+                _airborn = true;
+                transform.parent = GameObject.Find("Game").transform;
+            }
+        }
+        // Else, check for floor below
+        else
+        {
+            RaycastHit h1, h2;
+            Physics.Raycast(transform.position - Vector3.up / 2f + transform.forward * 0.25f, -transform.up, out h1);
+            Physics.Raycast(transform.position - Vector3.up / 2f - transform.forward * 0.25f, -transform.up, out h2);
+            if (h1.collider != null || h2.collider != null)
+            {
+                bool uh1 = false;
+                if (h1.distance < 0.9f && h1.collider != null)
+                {
+                    uh1 = true;
+                }
+                if ((h1.distance <= 0.9f && h1.collider != null) || (h2.distance <= 0.9f && h2.collider != null))
+                {
+                    _yVelocity = 0f;
+                    transform.position = new Vector3(transform.position.x, (uh1 ? h1.point.y : h2.point.y) + 1f, transform.position.z);
+                    if (_airborn)
+                    {
+                        if (h1.collider != null && h1.collider.transform.parent.name.Equals("MPlatform"))
+                        {
+                            transform.parent = h1.collider.transform.parent;
+							h1.collider.transform.parent.parent.GetComponent<PlatformScript>().OnLand();
+                        }
+                        else if (h2.collider != null && h2.collider.transform.parent.name.Equals("MPlatform"))
+                        {
+                            transform.parent = h2.collider.transform.parent;
+							h2.collider.transform.parent.parent.GetComponent<PlatformScript>().OnLand();
+                        }
+                        else
+                        {
+                            transform.parent = GameObject.Find("Game").transform;
+                        }
+                        if (!_diving)
+                        {
+                            //_anim.Play("Idle");
+                            //_animstate = AnimState.IDLE;
+                        }
+                        // Set airborn
+                        _airborn = false;
+                        _canDoubleJump = true;
+                        /*/ Check if jump button pressed before landing
+                        _landTime = Time.time;
+                        _landTime2 = Time.time;
+                        if (_jumpIter != 0 && _pressTime != -1f && _landTime - _pressTime < _jumpWindow)
+                        {
+                            // Second jump
+                            if (_jumpIter++ == 1)
+                            {
+                                PlaySound(1);
+                                _yVelocity = 1.8f;
+                            }
+                            // Third jump; make sure is moving to perform
+                            else if (_fVelocity > 0.2f)
+                            {
+                                PlaySound(2);
+                                _yVelocity = 2.25f;
+                                _jumpIter = 0;
+                            }
+                            // If failed third jump, do first jump
+                            else
+                            {
+                                PlaySound(0);
+                                _yVelocity = 1.25f;
+                                _jumpIter = 1;
+                            }
+                            // If third jump not performed, do not play sound
+                            if (_yVelocity > 1.5f)
+                            {
+                                _pressTime = -1f;
+                                _landTime = -1f;
+                            }
+                        }*/
+                    }
+                    // If not in air, check ground for objects
+                    else{
+                        if(h1.collider != null){
+                            CheckFloor(h1.collider);
+                        }else if(h2.collider != null){
+                            CheckFloor(h2.collider);
+                        }
+                    }
+                }
+                else
+                {
+                    transform.position += new Vector3(0f, 1f, 0f) * Time.deltaTime * _yVelocity * 10f;
+                    if (!_airborn)
+                    {
+                        transform.parent = GameObject.Find("Game").transform;
+                        _airborn = true;
+                    }
+                }
+            }
+            else
+            {
+                transform.position += new Vector3(0f, 1f, 0f) * Time.deltaTime * _yVelocity * 10f;
+                if (!_airborn)
+                {
+                    transform.parent = GameObject.Find("Game").transform;
+                    _airborn = true;
+                }
+            }
+        }
+    }
+    
+    float ti = 0f;
+    void CheckFloor(Collider c){
+        switch(c.name){
+            case("Summoner"):
+                _Checkpoint = c.transform.position;
+                ti += Time.deltaTime;
+            
+                _holdRB.AddTorque(_holdRB.velocity * 20f);
+                float forceMod = 1f;
+                if((Vector3.Distance(_holdRB.position, c.transform.position) < 30f)){
+                    _holdRB.drag = 5f;
+                    forceMod = 0.5f;
+                }
+
+                if(Vector2.Distance(new Vector2(_holdRB.position.x, _holdRB.position.z), new Vector2(c.transform.position.x, c.transform.position.z)) > 10f){                    
+                    if(ti > 1f){
+                        _holdRB.AddForce(new Vector3(0f, 1f, 0f) * 1000f);
+                        ti = 0f;
+                    }
+                }
+                
+                _holdRB.AddForce((c.transform.position - _holdRB.position + new Vector3(0f, 4f, 0f)).normalized * 150f * forceMod);
+                _holdRB.useGravity = false;
+                break;
+            default:
+                ti = 0f;
+                break;
+        }
+    }
+
+    void MovePosition(Vector3 movePos)
+    {
+        RaycastHit h1;
+        float dist = 0.6f;
+        if (Physics.Raycast(transform.position, new Vector3(movePos.x, 0f, 0f), out h1) || Physics.Raycast(transform.position + Vector3.up, new Vector3(movePos.x, 0f, 0f), out h1))
+        {
+            if (h1.distance < dist)
+            {
+                // Check for hold
+                Hold(h1.collider.gameObject);
+                
+                movePos.x = 0f;
+                float sign = -Mathf.Sign(h1.point.x - transform.position.x);
+                transform.position = new Vector3(h1.point.x + (dist - 0.05f) * sign, transform.position.y, transform.position.z);
+                // If moving too fast or diving/longjumping, hit wall
+                if ((_fVelocity > 0.2f) && (_diving || _longJumping || (_fVelocity > 1.3f && !_airborn)))
+                {
+                    if (h1.point.y < transform.position.y && _diving)
+                    {
+                        _fVelocity = 0f;
+                        _yVelocity = 1f;
+                        _longJumping = false;
+                        StopDiving();
+                        PlaySound(6);
+                        _hitWall = true;
+                    }
+                }
+                else
+                {
+                    _fVelocity /= 1.1f;
+                }
+            }
+        }
+        if (Physics.Raycast(transform.position, new Vector3(0f, 0f, movePos.z), out h1) || Physics.Raycast(transform.position + Vector3.up, new Vector3(0f, 0f, movePos.z), out h1))
+        {
+            if (h1.distance < dist)
+            {
+                // Check for hold
+                Hold(h1.collider.gameObject);
+                
+                movePos.z = 0f;
+                float sign = -Mathf.Sign(h1.point.z - transform.position.z);
+                transform.position = new Vector3(transform.position.x, transform.position.y, h1.point.z + (dist - 0.05f) * sign);
+                // If moving too fast or diving/longjumping, hit wall
+                if ((_fVelocity > 0.2f) && (_diving || _longJumping || (_fVelocity > 1.3f && !_airborn)))
+                {
+                    if (h1.point.y < transform.position.y && _diving)
+                    {
+                        _fVelocity = 0f;
+                        _yVelocity = 1f;
+                        _longJumping = false;
+                        StopDiving();
+                        PlaySound(6);
+                        _hitWall = true;
+                    }
+                }
+                else
+                {
+                    _fVelocity /= 1.1f;
+                }
+            }
+        }
+
+        transform.position += movePos * Time.deltaTime;
+    }
+
+    bool Hold(GameObject holdObject)
+    {
+        PlayerCube script = holdObject.GetComponent<PlayerCube>();
+        if (script != null && !_holding && !_diving)
+        {
+            if (!script.OnHold()) return false;
+            _holding = true;
+            _anim.SetTrigger("ToggleHold");
+            _anim.SetLayerWeight(1, 1f);
+            _heldItem = holdObject.transform;
+            _heldItem.rotation = Quaternion.identity;
+            _heldItem.parent = _anim.transform;
+            _heldItem.localPosition = new Vector3(0f, 1.971f + script.GetSize() / 2f, 0f);
+            _heldItem.GetComponent<Rigidbody>().isKinematic = true;
+            _heldItem.gameObject.layer = 2;
+            return true;
+        }
+        return false;
+    }
+
+    void PlaySound(int index, bool mainSound = true)
+    {
+        if (mainSound)
+        {
+            if (_currentSound != null) _currentSound.Stop();
+            _currentSound = transform.GetChild(0).GetChild(index).GetComponent<AudioSource>();
+            _currentSound.Play();
+            return;
+        }
+        AudioSource s = transform.GetChild(0).GetChild(index).GetComponent<AudioSource>();
+        s.pitch = 0.85f + Random.value * 0.3f;
+        s.Play();
+    }
+
+    void StopSound(int index)
+    {
+        transform.GetChild(0).GetChild(index).GetComponent<AudioSource>().Stop();
+    }
+
+    AudioSource GetSound(int index)
+    {
+        return transform.GetChild(0).GetChild(index).GetComponent<AudioSource>();
+    }
+
+    bool SoundPlaying(int index)
+    {
+        return transform.GetChild(0).GetChild(index).GetComponent<AudioSource>().isPlaying;
+    }
+
+    // Check for ledge grabs
+    private void OnTriggerEnter(Collider c)
+    {
+        if (!_hanging && _airborn && c.name.Equals("Edge") && Time.time - _lastLedgeGrab > 0.3f)
+        {
+            // Check for moving platforms
+            if (c.transform.parent.name.Equals("MPlatform"))
+            {
+                transform.parent = c.transform.parent;
+				c.transform.parent.parent.GetComponent<PlatformScript>().OnLand();
+            }
+            else
+            {
+                transform.parent = GameObject.Find("Game").transform;
+            }
+            Vector3 look = c.ClosestPoint(transform.position + new Vector3(0f, 1f, 0f));
+            look.y = transform.position.y;
+            transform.LookAt(look);
+            transform.position = new Vector3(transform.position.x, c.transform.position.y - 1f, transform.position.z);
+            _hanging = true;
+            PlaySound(3);
+            _longJumping = false;
+            _backflipping = false;
+            _summersaulting = false;
+            StopDiving();
+            _hitWall = false;
+            if (_wallsliding)
+            {
+                _wallsliding = false;
+                _anim.transform.Rotate(new Vector3(0f, 180f, 0f));
+            }
+            _jumpIter = 0;
+            StopSound(11);
+            _canDoubleJump = true;
+            _fVelocity = 0f;
+            _yVelocity = 0f;
+        }
+    }
+
+    /*/ Check for wall slide
+    private void OnTriggerStay(Collider c)
+    {
+        if (_airborn && !c.name.Equals("Edge") && axisLeft.magnitude != 0f && _yVelocity < 0.2f && Time.time - _lastWallSlide > 0.3f && !_diving && !_longJumping && !_hitWall && !_wallsliding && !_hanging)
+        {
+            // Check for moving platforms
+            if (c.transform.parent.name.Equals("MPlatform"))
+            {
+                transform.parent = c.transform.parent;
+				c.transform.parent.parent.GetComponent<PlatformScript>().OnLand();
+            }
+            else
+            {
+                transform.parent = GameObject.Find("Game").transform;
+            }
+            _lastWallSlide = Time.time;
+            Vector3 look = c.ClosestPoint(transform.position + new Vector3(0f, 1f, 0f));
+            look.y = transform.position.y;
+            transform.LookAt(look);
+            _backflipping = false;
+            _summersaulting = false;
+            _wallsliding = true;
+            _jumpIter = 0;
+            _fVelocity = 0f;
+            _yVelocity = 0f;
+            PlaySound(11, false);
+        }
+    }*/
+
+    private void OnCollisionEnter(Collision collision)
+    {
+
+    }
+
+}
