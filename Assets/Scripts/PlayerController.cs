@@ -48,7 +48,6 @@ public class PlayerController : MonoBehaviour
         _checkcubeScript = _holdRB.transform.GetComponent<PlayerCube>();
 
         _throwGuess = GameObject.Find("Estimate").GetComponent<MeshRenderer>();
-        _throwGuess.enabled = false;
     }
 
     private void LateUpdate()
@@ -101,7 +100,6 @@ public class PlayerController : MonoBehaviour
         {
             _camHeight += axisRight.y * Time.deltaTime * 45f;
             _camHeight = Mathf.Clamp(_camHeight, -5f, 25f);
-            Debug.Log(_camHeight);
         }
         // Interpolate camera for smoothness
         Vector3 xz = (transform.position - _camPosDesired);
@@ -137,17 +135,10 @@ public class PlayerController : MonoBehaviour
         Quaternion r = transform.rotation;
         r.eulerAngles = new Vector3(_anim.transform.eulerAngles.x, r.eulerAngles.y + 90f, r.eulerAngles.z);
         _anim.transform.rotation = Quaternion.Lerp(_anim.transform.rotation, r, Time.deltaTime * (_summersaultSliding || _airborn ? 6f : 100f));
-
-        // TRY and predict throwing using physics shit
-        _throwGuess.transform.position -= (_throwGuess.transform.position - (transform.position + transform.up + (((transform.forward * 600f * Mathf.Clamp(_fVelocity, 0.05f, 1f) * (_airborn ? 2f : 3.5f)) + new Vector3(0f, (_airborn ? 3f : 1.5f), 0f) * 250f).normalized * 20f * _fVelocity))) * Time.deltaTime * 8f;
-        if (_holding)
-        {
-            _throwGuess.enabled = true;
-        }
-        else
-        {
-            _throwGuess.enabled = false;
-        }
+        /*
+        Vector3 pp = ((transform.forward * 600f * Mathf.Clamp(_fVelocity, 0.05f, 1f) * (_airborn ? 2f : 3.5f)) + new Vector3(0f, (_airborn ? 3f : 1.5f), 0f) * 220f).normalized * _fVelocity * 35f;
+        LineRenderer rr = GameObject.Find("Line").GetComponent<LineRenderer>();
+        rr.SetPositions(Plot(_holdRB, transform.position, pp, 30));*/
     }
 
     float _lookIter, _camDistance = 10f, _camHeight = 8f, _airTime, _maxClamp, _diveTimer;
@@ -173,6 +164,8 @@ public class PlayerController : MonoBehaviour
         SLIDING
     }
 
+    float _holdTimer = 1f;
+
     // Update is called once per frame
     void Update()
     {
@@ -188,9 +181,15 @@ public class PlayerController : MonoBehaviour
         if (_holding)
         {
             _heldItem.localRotation = Quaternion.identity;
-            if (Input.GetKeyDown(KeyCode.E) || Input.GetButtonDown("Square"))
+            _heldItem.localPosition = new Vector3(0f, 1.971f + _heldItem.GetComponent<PlayerCube>().GetSize() / 2f, 0f);
+            if (Input.GetKey(KeyCode.E) || Input.GetButton("Square"))
+            {
+                _holdTimer += Time.deltaTime * 8f;
+            }
+            if (Input.GetKeyUp(KeyCode.E) || Input.GetButtonUp("Square"))
             {
                 Throw();
+                _holdTimer = 1f;
             }
         }
         else
@@ -337,7 +336,7 @@ public class PlayerController : MonoBehaviour
         // If diving, only slow down on floor
         if (_diving)
         {
-            if (!_airborn) _fVelocity = Mathf.Clamp(_fVelocity - Time.deltaTime * (oppositeStick ? 2f : 0.5f) + Time.deltaTime * (onSlippery ? 4.5f : 0f), 0f, 1f);
+            if (!_airborn) _fVelocity = Mathf.Clamp(_fVelocity - Time.deltaTime * (oppositeStick ? 2f : 0.5f) + Time.deltaTime * (onSlippery ? 4.5f : 0f), 0f, 10f);
             if (axisLeft.magnitude > 0f && !_airborn && !oppositeStick)
             {
                 Camera cam = Camera.main;
@@ -378,7 +377,7 @@ public class PlayerController : MonoBehaviour
             }
             else if (_fVelocity <= _maxClamp)
             {
-                _fVelocity = Mathf.Clamp(_fVelocity + Time.deltaTime * (_airborn ? 0.1f : 1f), 0f, _maxClamp);
+                _fVelocity = Mathf.Clamp(_fVelocity + Time.deltaTime * (_airborn ? 0.1f : 1f), 0f, (_groundSlope != 0f ? 5f : _maxClamp));
             }
             else if (!_airborn)
             {
@@ -493,7 +492,7 @@ public class PlayerController : MonoBehaviour
         // Dive / throw
         if (Input.GetButtonDown("Circle") || Input.GetKeyDown("v"))
         {
-            if (!_holding)
+            if (!_holding && _airborn)
             {
                 Dive();
             }
@@ -513,8 +512,57 @@ public class PlayerController : MonoBehaviour
         // Add forces
         Rigidbody r = _heldItem.GetComponent<Rigidbody>();
         r.isKinematic = false;
-        r.velocity = transform.GetComponent<Rigidbody>().velocity;
-        r.AddForce((transform.forward * 600f * Mathf.Clamp(_fVelocity, 0.05f, 1f) * (_airborn ? 2f : 3.5f)) + new Vector3(0f, (_airborn ? 3f : 1.5f), 0f) * 220f);
+        _holdTimer = Mathf.Clamp(_holdTimer, 0.0f, 10f);
+        // Check if target is in front or nah
+        if (_cs.Count > 0)
+        {
+            Vector3 point;
+            if (_cs.Count == 1)
+            {
+                point = _cs[0].transform.position;
+            }
+            else
+            {
+                float cp = Mathf.Infinity;
+                int iter = 0;
+                for (int i = 0; i < _cs.Count; i++)
+                {
+                    float dis = Vector3.Distance(_cs[i].transform.position, transform.position);
+                    if (dis < cp)
+                    {
+                        cp = dis;
+                        iter = i;
+                    }
+                }
+                point = _cs[iter].transform.position;
+            }
+            _throwGuess.transform.position = point;
+
+            float angle = (_airborn ? 30f : 10f);//(Vector3.Angle(transform.position, point) + 5f);
+            Vector3 vel = new Vector3(float.NaN, float.NaN, float.NaN);
+            while(Vector3.Equals(vel, new Vector3(float.NaN, float.NaN, float.NaN)))
+            {
+                vel = GetVelocity(point, angle);
+                angle += 5f;
+            }
+            /*if (vel.magnitude > 50f)
+            {
+                vel = vel.normalized * 50;
+            } else if (vel.magnitude < 40f && !_airborn && point.y < transform.position.y - 2f)
+            {
+                vel = vel.normalized * 40f;
+            }*/
+            if(!_airborn)vel = vel.normalized * _holdTimer * 5f;
+            Vector2 v1 = new Vector2(transform.position.x, transform.position.z),
+                v2 = new Vector2(point.x, point.z);
+            Debug.Log(vel.magnitude + " : " + (Mathf.Atan2(v2.y, v2.x) - Mathf.Atan2(v1.y, v1.x)));
+            r.velocity = vel;
+        }
+        else
+        {
+            r.velocity = transform.GetComponent<Rigidbody>().velocity;
+            r.AddForce(((transform.forward * 600f * (_airborn ? 2f : 3.5f)) + new Vector3(0f, (_airborn ? 3f : 1.5f), 0f) * 300f).normalized * _holdTimer * 250f);
+        }
         r.AddTorque(new Vector3(transform.forward.z, 0f, -transform.forward.x) * 100f);
         _heldItem.gameObject.layer = 0;
         // Fire script
@@ -527,7 +575,6 @@ public class PlayerController : MonoBehaviour
         _heldItem = null;
         _throwTimer = Time.time;
     }
-
 
     bool Hold(GameObject holdObject)
     {
@@ -544,6 +591,7 @@ public class PlayerController : MonoBehaviour
             _heldItem.localPosition = new Vector3(0f, 1.971f + script.GetSize() / 2f, 0f);
             _heldItem.GetComponent<Rigidbody>().isKinematic = true;
             _heldItem.gameObject.layer = 2;
+            PlaySound(14, false);
             return true;
         }
         return false;
@@ -592,8 +640,10 @@ public class PlayerController : MonoBehaviour
             _JUMP_HOLD_MODIFIER = 7f,
             _holdTimer, _HOLDTIMER_SET = 0.25f,
             // Used for longjumping
-            _LONGJUMP_MODIFIER = 1.25f,
-            _LONGJUMP_HOLD_MODIFIER = 7.5f;
+            _LONGJUMP_MODIFIER = 1.1f,
+            _LONGJUMP_HOLD_MODIFIER = 7.6f,
+            // Diving
+            _DIVING_HOLD_MODIFIER = 5f;
     }
 
     void Gravity()
@@ -601,14 +651,17 @@ public class PlayerController : MonoBehaviour
         JumpAttributes._holdTimer -= Time.deltaTime;
         if ((_airborn && _yVelocity > 0.2f && (Input.GetButton("X") || Input.GetKey(KeyCode.Space)) && !_diving && !_longJumping) && JumpAttributes._holdTimer > 0f)
         {
-            _yVelocity = Mathf.Clamp(_yVelocity + Time.deltaTime * JumpAttributes._JUMP_HOLD_MODIFIER, -3f, 10f);
+            _yVelocity = Mathf.Clamp(_yVelocity + Time.deltaTime * JumpAttributes._JUMP_HOLD_MODIFIER, -4f, 10f);
         }
-        else if (_airborn && _longJumping)
+        else if (_airborn)
         {
-            _yVelocity = Mathf.Clamp(_yVelocity + Time.deltaTime * JumpAttributes._LONGJUMP_HOLD_MODIFIER, -3f, 10f);
+            float mod = 0f;
+            if(_longJumping) mod = JumpAttributes._LONGJUMP_HOLD_MODIFIER;
+            else if (_diving) mod = JumpAttributes._DIVING_HOLD_MODIFIER;
+            _yVelocity = Mathf.Clamp(_yVelocity + Time.deltaTime *mod, -4f, 10f);
         }
         // Apply gravity; slowly reduce yVelocity until negative
-        _yVelocity = Mathf.Clamp(_yVelocity - Time.deltaTime * JumpAttributes._GRAVITY_MODIFIER * _gravityModifier, -2.5f, 10f);
+        _yVelocity = Mathf.Clamp(_yVelocity - Time.deltaTime * JumpAttributes._GRAVITY_MODIFIER * _gravityModifier, -4f, 10f);
         // If has velocity, add
         if (_yVelocity > 0f)
         {
@@ -616,7 +669,7 @@ public class PlayerController : MonoBehaviour
             if (Physics.Raycast(transform.position + new Vector3(0f, 0.75f, 0f), transform.up, out h))
             {
                 // Check for hold and distance
-                if (!Hold(h.collider.gameObject) && h.distance <= 0.25f)
+                if (h.distance <= 0.25f && !Hold(h.collider.gameObject))
                 {
                     _yVelocity = -0.25f;
                 }
@@ -632,10 +685,17 @@ public class PlayerController : MonoBehaviour
         else
         {
             RaycastHit h1, h2;
-            Physics.Raycast(transform.position - Vector3.up / 2f + transform.forward * 0.25f, -transform.up, out h1);
-            Physics.Raycast(transform.position - Vector3.up / 2f - transform.forward * 0.25f, -transform.up, out h2);
+            Physics.Raycast(transform.position - Vector3.up / 2f + transform.forward * 0.2f, -transform.up, out h1);
+            Physics.Raycast(transform.position - Vector3.up / 2f - transform.forward * 0.2f, -transform.up, out h2);
             if (h1.collider != null || h2.collider != null)
             {
+                _groundSlope = h1.point.y - h2.point.y;
+                if(Mathf.Abs(_groundSlope) > 0.75f)
+                {
+                    _groundSlope = 0f;
+                }
+                Debug.Log(_groundSlope + " : " + _fVelocity);
+
                 bool uh1 = false;
                 if (h1.distance < 0.9f && h1.collider != null)
                 {
@@ -699,7 +759,7 @@ public class PlayerController : MonoBehaviour
         }
     }
 
-    float ti = 0f;
+    float ti = 0f, _groundSlope;
     void CheckFloor(Collider c)
     {
         switch (c.name)
@@ -728,6 +788,9 @@ public class PlayerController : MonoBehaviour
                 _holdRB.AddForce((c.transform.position - _holdRB.position + new Vector3(0f, 4f, 0f)).normalized * 150f * forceMod);
                 _holdRB.useGravity = false;
                 break;
+            case ("Tramp"):
+                _yVelocity = 6f;
+                break;
             default:
                 ti = 0f;
                 break;
@@ -736,67 +799,84 @@ public class PlayerController : MonoBehaviour
 
     void MovePosition(Vector3 movePos)
     {
+        // Change velocity based on slope
+        if (!_airborn && _groundSlope != 0f) {
+            float c = -_groundSlope * Time.deltaTime * 10f;
+            if (c > 0f)
+            {
+                c *= (_diving ? 1.75f : 2.25f);
+            }
+            _fVelocity = Mathf.Clamp(_fVelocity + c, 0f, 2f);
+        }
+        // Cast rays in x dir
         RaycastHit h1;
         float dist = 0.6f;
-        if (Physics.Raycast(transform.position, new Vector3(movePos.x, 0f, 0f), out h1) || Physics.Raycast(transform.position + Vector3.up, new Vector3(movePos.x, 0f, 0f), out h1))
+        if (Physics.Raycast(transform.position - transform.up * 0.9f, new Vector3(movePos.x, 0f, 0f), out h1) || Physics.Raycast(transform.position + Vector3.up, new Vector3(movePos.x, 0f, 0f), out h1))
         {
             if (h1.distance < dist)
             {
                 // Check for hold
                 Hold(h1.collider.gameObject);
 
-                movePos.x = 0f;
-                float sign = -Mathf.Sign(h1.point.x - transform.position.x);
-                transform.position = new Vector3(h1.point.x + (dist - 0.05f) * sign, transform.position.y, transform.position.z);
-                // If moving too fast or diving/longjumping, hit wall
-                if ((_fVelocity > 0.2f) && (_diving || _longJumping || (_fVelocity > 1.3f && !_airborn)))
+                _longJumping = false;
+                if (h1.normal.y == 0f)
                 {
-                    if (h1.point.y < transform.position.y && _diving)
+                    movePos.x = 0f;
+                    float sign = -Mathf.Sign(h1.point.x - transform.position.x);
+                    transform.position = new Vector3(h1.point.x + (dist - 0.05f) * sign, transform.position.y, transform.position.z);
+                    // If moving too fast or diving/longjumping, hit wall
+                    if ((_fVelocity > 0.2f) && (_diving || _longJumping || (_fVelocity > 1.3f && !_airborn)))
                     {
-                        _fVelocity = 0f;
-                        _yVelocity = 1f;
-                        _longJumping = false;
-                        StopDiving();
-                        PlaySound(6);
-                        _hitWall = true;
+                        if (h1.point.y < transform.position.y && _diving)
+                        {
+                            _fVelocity = 0f;
+                            _yVelocity = 1f;
+                            StopDiving();
+                            PlaySound(6);
+                            _hitWall = true;
+                        }
                     }
-                }
-                else
-                {
-                    _fVelocity /= 1.1f;
+                    else
+                    {
+                        _fVelocity /= 1.05f;
+                    }
                 }
             }
         }
-        if (Physics.Raycast(transform.position, new Vector3(0f, 0f, movePos.z), out h1) || Physics.Raycast(transform.position + Vector3.up, new Vector3(0f, 0f, movePos.z), out h1))
+        // Cast rays in z dir
+        if (Physics.Raycast(transform.position - transform.up * 0.9f, new Vector3(0f, 0f, movePos.z), out h1) || Physics.Raycast(transform.position + Vector3.up, new Vector3(0f, 0f, movePos.z), out h1))
         {
             if (h1.distance < dist)
             {
                 // Check for hold
                 Hold(h1.collider.gameObject);
 
-                movePos.z = 0f;
-                float sign = -Mathf.Sign(h1.point.z - transform.position.z);
-                transform.position = new Vector3(transform.position.x, transform.position.y, h1.point.z + (dist - 0.05f) * sign);
-                // If moving too fast or diving/longjumping, hit wall
-                if ((_fVelocity > 0.2f) && (_diving || _longJumping || (_fVelocity > 1.3f && !_airborn)))
+                _longJumping = false;
+                if (h1.normal.y == 0f)
                 {
-                    if (h1.point.y < transform.position.y && _diving)
+                    movePos.z = 0f;
+                    float sign = -Mathf.Sign(h1.point.z - transform.position.z);
+                    transform.position = new Vector3(transform.position.x, transform.position.y, h1.point.z + (dist - 0.05f) * sign);
+                    // If moving too fast or diving/longjumping, hit wall
+                    if ((_fVelocity > 0.2f) && (_diving || _longJumping || (_fVelocity > 1.3f && !_airborn)))
                     {
-                        _fVelocity = 0f;
-                        _yVelocity = 1f;
-                        _longJumping = false;
-                        StopDiving();
-                        PlaySound(6);
-                        _hitWall = true;
+                        if (h1.point.y < transform.position.y && _diving)
+                        {
+                            _fVelocity = 0f;
+                            _yVelocity = 1f;
+                            StopDiving();
+                            PlaySound(6);
+                            _hitWall = true;
+                        }
                     }
-                }
-                else
-                {
-                    _fVelocity /= 1.1f;
+                    else
+                    {
+                        _fVelocity -= 1f * Time.deltaTime;
+                    }
                 }
             }
         }
-
+        // Move transform based on rays
         transform.position += movePos * Time.deltaTime;
     }
 
@@ -828,4 +908,74 @@ public class PlayerController : MonoBehaviour
     {
         return transform.GetChild(0).GetChild(index).GetComponent<AudioSource>().isPlaying;
     }
+
+    public static Vector3[] Plot(Rigidbody rigidbody, Vector3 pos, Vector3 velocity, int steps)
+    {
+        Vector3[] results = new Vector3[steps];
+
+        float timestep = Time.fixedDeltaTime / Physics.solverVelocityIterationCount;
+        Vector3 gravityAccel = Physics.gravity * timestep * timestep;
+        float drag = 1f - timestep * rigidbody.drag;
+        Vector3 moveStep = velocity * timestep;
+
+        for (int i = 0; i < steps; ++i)
+        {
+            moveStep += gravityAccel;
+            moveStep *= drag;
+            pos += moveStep;
+            results[i] = pos;
+        }
+
+        return results;
+    }
+
+    List<Collider> _cs = new List<Collider>();
+    private void OnTriggerStay(Collider other)
+    {
+        if(other.name.Substring(0, 4).Equals("Cube"))
+        {
+            foreach(Collider c in _cs)
+            {
+                if (c.GetInstanceID() == other.GetInstanceID()) return;
+            }
+            _cs.Add(other);
+            other.GetComponent<MeshRenderer>().material.color = Color.red;
+        }
+    }
+
+    private void OnTriggerExit(Collider other)
+    {
+        if (other.name.Substring(0, 4).Equals("Cube"))
+        {
+            if (_cs.Remove(other))
+                other.GetComponent<MeshRenderer>().material.color = Color.white;
+        }
+    }
+
+    Vector3 GetVelocity(Vector3 point, float initialAngle = 45f)
+    {
+        float gravity = Physics.gravity.magnitude;
+        // Selected angle in radians
+        float angle = initialAngle * Mathf.Deg2Rad;
+
+        // Positions of this object and the target on the same plane
+        Vector3 planarTarget = new Vector3(point.x, 0, point.z);
+        Vector3 planarPostion = new Vector3(_holdRB.position.x, 0, _holdRB.position.z);
+
+        // Planar distance between objects
+        float distance = Vector3.Distance(planarTarget, planarPostion);
+        // Distance along the y axis between objects
+        float yOffset = _holdRB.position.y - point.y;
+
+        float initialVelocity = (1 / Mathf.Cos(angle)) * Mathf.Sqrt((0.5f * gravity * Mathf.Pow(distance, 2)) / (distance * Mathf.Tan(angle) + yOffset));
+
+        Vector3 velocity = new Vector3(0, initialVelocity * Mathf.Sin(angle), initialVelocity * Mathf.Cos(angle));
+
+        // Rotate our velocity to match the direction between the two objects
+        float angleBetweenObjects = Vector3.Angle(Vector3.forward, planarTarget - planarPostion) * (point.x > transform.position.x ? 1 : -1);
+        Vector3 finalVelocity = Quaternion.AngleAxis(angleBetweenObjects, Vector3.up) * velocity;
+
+        return finalVelocity;
+    }
 }
+ 

@@ -36,10 +36,12 @@ public class PlayerCube : MonoBehaviour {
 	}
     
     void OnCollisionEnter(Collision c){
-        Debug.Log(c.collider.name);
         switch(c.collider.name){
             case("Stick"):
                 Stick(c);                
+                break;
+            case ("Tramp"):
+                _rb.AddForce(c.contacts[0].normal * 800f);
                 break;
         }
     }
@@ -84,7 +86,9 @@ public class PlayerCube : MonoBehaviour {
         if(_type == CubeType.LOW_GRAVITY){
             PlayerController._Player._gravityModifier = 0.65f;
         }
-        
+
+        GetComponent<BoxCollider>().enabled = false;
+
         return true;
     }
     
@@ -94,6 +98,8 @@ public class PlayerCube : MonoBehaviour {
         if(_type == CubeType.LOW_GRAVITY){
             PlayerController._Player._gravityModifier = 1f;
         }
+
+        GetComponent<BoxCollider>().enabled = true;
     }
 
     public float GetSize()
